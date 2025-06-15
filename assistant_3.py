@@ -3,7 +3,9 @@ import sounddevice as sd
 import scipy.io.wavfile
 import whisper
 import cv2
-from threading import Lock, Thread
+import time
+import numpy as np
+from threading import Lock
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema.messages import SystemMessage
 from langchain_community.chat_message_histories import ChatMessageHistory
@@ -21,35 +23,18 @@ load_dotenv()
 class WebcamStream:
     def __init__(self):
         self.stream = cv2.VideoCapture(0)
-        _, self.frame = self.stream.read()
         self.running = False
         self.lock = Lock()
+        _, self.frame = self.stream.read()
+        if self.frame is None:
+            self.frame = np.zeros((480, 640, 3), dtype=np.uint8)
 
     def start(self):
-        if self.running:
-            return self
         self.running = True
-        self.thread = Thread(target=self.update)
-        self.thread.start()
         return self
 
-    def update(self):
-        while self.running:
-            _, frame = self.stream.read()
-            with self.lock:
-                self.frame = frame
-
-    # def read(self, encode=False):
-    #     with self.lock:
-    #         frame = self.frame.copy()
-    #     if encode:
-    #         _, buffer = cv2.imencode(".jpeg", frame)
-    #         return base64.b64encode(buffer)
-    #     return frame
-    
     def read(self, encode=False):
-        with self.lock:
-            frame = self.frame.copy() if self.frame is not None else None
+        _, frame = self.stream.read()
         if frame is None:
             return None
         if encode:
@@ -57,31 +42,15 @@ class WebcamStream:
             return base64.b64encode(buffer)
         return frame
 
-
     def stop(self):
         self.running = False
-        if self.thread.is_alive():
-            self.thread.join()
         self.stream.release()
-
 
 # ----------------- Assistant Logic -----------------
 class Assistant:
     def __init__(self, model):
         self.chain = self._create_inference_chain(model)
 
-    # def answer(self, prompt, image):
-    #     if not prompt:
-    #         print("🛑 No prompt provided.")
-    #         return
-    #     print(f"🧠 Prompt: {prompt}")
-    #     response = self.chain.invoke(
-    #         {"prompt": prompt, "image_base64": image.decode()},
-    #         config={"configurable": {"session_id": "unused"}}
-    #     ).strip()
-    #     print("🤖 Assistant:", response)
-    #     return response
-    
     def answer(self, prompt, image):
         if not prompt:
             print("🛑 No prompt provided.")
@@ -94,18 +63,14 @@ class Assistant:
         print("🤖 Assistant:", response)
         self._tts(response)
 
-    
-    # Inside Assistant class
     def _tts(self, response_text):
         print("🗣️ Speaking...")
-
         player = PyAudio().open(
             format=paInt16,
             channels=1,
             rate=24000,
             output=True
         )
-
         with openai.audio.speech.with_streaming_response.create(
             model="tts-1",
             voice="alloy",
@@ -114,7 +79,6 @@ class Assistant:
         ) as stream:
             for chunk in stream.iter_bytes(chunk_size=1024):
                 player.write(chunk)
-
         player.stop_stream()
         player.close()
 
@@ -141,7 +105,6 @@ class Assistant:
 
         chain = prompt_template | model | StrOutputParser()
         chat_message_history = ChatMessageHistory()
-
         return RunnableWithMessageHistory(
             chain,
             lambda _: chat_message_history,
@@ -149,25 +112,8 @@ class Assistant:
             history_messages_key="chat_history"
         )
 
-def show_webcam_feed(stream: WebcamStream):
-    while stream.running:
-        frame = stream.read()
-
-        if frame is None:
-            print("⚠️ No frame received from webcam.")
-            continue
-
-        cv2.imshow("📷 Webcam View", frame)
-
-        if cv2.waitKey(1) in [27, ord("q")]:
-            stream.stop()
-            break
-
-    cv2.destroyAllWindows()
-
-
 # ----------------- Voice + Vision Flow -----------------
-def record_audio(filename="input.wav", duration=5, samplerate=16000):
+def record_audio(filename="input.wav", duration=6, samplerate=16000):
     print("🎙️ Recording... Speak now!")
     audio = sd.rec(int(samplerate * duration), samplerate=samplerate, channels=1, dtype='int16')
     sd.wait()
@@ -179,48 +125,40 @@ def transcribe_audio(filename="input.wav"):
     result = model.transcribe(filename)
     return result["text"]
 
-# ----------------- Main -----------------
+# ----------------- Main Loop -----------------
 if __name__ == "__main__":
     webcam_stream = WebcamStream().start()
     model = ChatOpenAI(model="gpt-4o")
     assistant = Assistant(model)
-    
-    # 👇 Launch webcam window in its own thread
-    from threading import Thread
-    Thread(target=show_webcam_feed, args=(webcam_stream,), daemon=True).start()
+
+    print("\n🎧 Assistant running. Speak every 10 seconds.")
+    print("❌ Press Q or Esc in the webcam window to quit.\n")
+
+    last_listen_time = 0
 
     try:
-        print("\n👂 Press [Enter] to speak, or type 'q' + [Enter] to quit.")
-        # while True:
-        #     user_input = input("🎤 Ready to listen? ")
-        #     if user_input.lower() == "q":
-        #         break
-
-        #     record_audio()
-        #     prompt = transcribe_audio()
-        #     img = webcam_stream.read(encode=True)
-        #     assistant.answer(prompt, img)
-        
         while True:
-            user_input = input("🎤 Press [Enter] to speak or type 'q' to quit: ")
-            if user_input.lower() == "q":
-                break
-
-            record_audio()
-            prompt = transcribe_audio()
-            img = webcam_stream.read(encode=True)
-            assistant.answer(prompt, img)
-
-            # 👇 Show the webcam frame
             frame = webcam_stream.read()
-            cv2.imshow("📷 Webcam View", frame)
+            if frame is not None:
+                cv2.imshow("Webcam", frame)
 
-            # ⌨️ Close with 'q' or Esc key
             if cv2.waitKey(1) in [27, ord("q")]:
                 break
 
+            if time.time() - last_listen_time > 10:
+                last_listen_time = time.time()
+                record_audio()
+                prompt = transcribe_audio()
+                if prompt.strip():
+                    img = webcam_stream.read(encode=True)
+                    assistant.answer(prompt, img)
+                else:
+                    print("⚠️ Nothing heard.")
+
+    except KeyboardInterrupt:
+        print("🛑 Stopped by user.")
 
     finally:
         webcam_stream.stop()
         cv2.destroyAllWindows()
-        print("🛑 Session ended.")
+        print("✅ Session ended.")
