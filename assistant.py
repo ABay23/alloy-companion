@@ -136,6 +136,13 @@ class Assistant:
 
 webcam_stream = WebcamStream().start()
 
+while True:
+    cv2.imshow("webcam", webcam_stream.read())
+    if cv2.waitKey(1) in [27, ord("q")]:
+        print("🛑 Exiting webcam loop")
+        break
+
+
 # model = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest")
 
 # You can use OpenAI's GPT-4o model instead of Gemini Flash
@@ -145,13 +152,24 @@ model = ChatOpenAI(model="gpt-4o")
 assistant = Assistant(model)
 
 
+# def audio_callback(recognizer, audio):
+#     try:
+#         prompt = recognizer.recognize_whisper(audio, model="base", language="english")
+#         assistant.answer(prompt, webcam_stream.read(encode=True))
+
+#     except UnknownValueError:
+#         print("There was an error processing the audio.")
+
 def audio_callback(recognizer, audio):
+    print("🎙️ Audio captured!")
     try:
         prompt = recognizer.recognize_whisper(audio, model="base", language="english")
+        print("🧠 Whisper recognized:", prompt)
         assistant.answer(prompt, webcam_stream.read(encode=True))
-
     except UnknownValueError:
-        print("There was an error processing the audio.")
+        print("🤷‍♂️ Whisper could not understand audio.")
+    except Exception as e:
+        print("💥 Whisper error:", e)
 
 
 recognizer = Recognizer()
