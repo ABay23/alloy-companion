@@ -73,7 +73,8 @@ class Assistant:
         )
         with openai.audio.speech.with_streaming_response.create(
             model="tts-1",
-            voice="alloy",
+            # voice="alloy",
+            voice="echo",
             response_format="pcm",
             input=response_text
         ) as stream:
@@ -113,7 +114,7 @@ class Assistant:
         )
 
 # ----------------- Voice + Vision Flow -----------------
-def record_audio(filename="input.wav", duration=6, samplerate=16000):
+def record_audio(filename="input.wav", duration=12, samplerate=16000):
     print("🎙️ Recording... Speak now!")
     audio = sd.rec(int(samplerate * duration), samplerate=samplerate, channels=1, dtype='int16')
     sd.wait()
